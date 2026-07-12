@@ -103,6 +103,8 @@ textarea::placeholder{color:var(--muted)}
 .insights-list li{font-size:12.5px;color:var(--muted);padding:4px 0 4px 16px;position:relative;line-height:1.55}
 .insights-list li::before{content:'▸';position:absolute;left:2px;color:var(--primary);font-size:10px}
 .no-data{color:var(--muted);font-size:13px;text-align:center;padding:24px 0}
+@media(max-width:900px){.kw-row{grid-template-columns:1fr 1fr!important}}
+@media(max-width:600px){.kw-row{grid-template-columns:1fr!important}}
 /* alert */
 .alert{padding:11px 15px;border-radius:8px;font-size:13px;margin-top:12px}
 .alert-err{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#fca5a5}
@@ -192,10 +194,20 @@ Pre-wash stages: Washing, Drying, Clay &amp; Detailing
     </div>
   </div>
 
-  <!-- 브랜드 감성 분석 (full width) -->
-  <div class="full-card">
-    <div class="chart-lbl">🎭 브랜드별 감성 분석 (긍정 / 부정 / 중립)</div>
-    <div class="chart-wrap-lg"><canvas id="sentimentChart"></canvas></div>
+  <!-- 키워드 분류 차트 3개 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;margin-bottom:20px" class="kw-row">
+    <div class="chart-card">
+      <div class="chart-lbl">⚙️ 성능/특성 키워드</div>
+      <div class="chart-wrap-md"><canvas id="perfKwChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-lbl">📋 요구사항 키워드</div>
+      <div class="chart-wrap-md"><canvas id="reqKwChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-lbl">⚠️ 불만 키워드</div>
+      <div class="chart-wrap-md"><canvas id="compKwChart"></canvas></div>
+    </div>
   </div>
 
   <!-- 비교 제품 쌍 + 가성비 -->
@@ -403,12 +415,16 @@ function renderDashboard(){
   renderBrandChart(brandCnt);
   renderCatChart(catCnt);
 
-  // New sections
-  const topComplaints = aggComplaints();
-  const topReqs = aggRequirements();
-  renderComplaintsChart(topComplaints);
-  renderReqChart(topReqs);
-  renderSentimentChart(aggBrandSentiment());
+  // Complaints & requirements
+  renderComplaintsChart(aggComplaints());
+  renderReqChart(aggRequirements());
+
+  // 3-category keyword charts
+  renderKwChart('perfKwChart', aggKeywords('performance_keywords'), 'rgba(99,102,241,.7)', '#6366f1');
+  renderKwChart('reqKwChart',  aggKeywords('requirement_keywords'), 'rgba(16,185,129,.7)',  '#10b981');
+  renderKwChart('compKwChart', aggKeywords('complaint_keywords'),   'rgba(239,68,68,.7)',   '#ef4444');
+
+  // Comparison & value
   renderComparisons(aggComparisons());
   renderValueChart(aggValueBrands());
   renderTrendChart(aggYears());
@@ -430,17 +446,10 @@ function aggRequirements(){
   for(const r of results) for(const c of r.requirements_top||[]) if(c.requirement) m[c.requirement]=(m[c.requirement]||0)+(c.count||1);
   return sortedEntries(m,5);
 }
-function aggBrandSentiment(){
+function aggKeywords(field){
   const m={};
-  for(const r of results){
-    const s=r.sentiment||{positive:0,negative:0,neutral:0};
-    for(const b of r.brands||[]){
-      if(!m[b]) m[b]={p:0,n:0,neu:0};
-      m[b].p+=s.positive||0; m[b].n+=s.negative||0; m[b].neu+=s.neutral||0;
-    }
-  }
-  return sortedEntries(Object.fromEntries(Object.entries(m).map(([k,v])=>[k,v.p+v.n+v.neu])),8)
-    .map(([k])=>[k,m[k]]);
+  for(const r of results) for(const k of r[field]||[]) if(k) m[k]=(m[k]||0)+1;
+  return sortedEntries(m,10);
 }
 function aggComparisons(){
   const m={};
@@ -515,23 +524,21 @@ function renderReqChart(data){
   });
 }
 
-function renderSentimentChart(data){
-  destroyChart('sentiment');
-  const el=document.getElementById('sentimentChart');
-  if(!data.length){ el.parentElement.innerHTML='<div class="no-data">감성 데이터 없음</div>'; return; }
-  charts.sentiment=new Chart(el,{
+function renderKwChart(canvasId, data, bgColor, borderColor){
+  destroyChart(canvasId);
+  const el=document.getElementById(canvasId);
+  if(!el) return;
+  if(!data.length){ el.parentElement.innerHTML='<div class="no-data">데이터 없음</div>'; return; }
+  charts[canvasId]=new Chart(el,{
     type:'bar',
     data:{
-      labels:data.map(([k])=>k),
-      datasets:[
-        {label:'긍정',data:data.map(([,v])=>v.p),backgroundColor:'rgba(16,185,129,.75)',stack:'s'},
-        {label:'부정',data:data.map(([,v])=>v.n),backgroundColor:'rgba(239,68,68,.75)',stack:'s'},
-        {label:'중립',data:data.map(([,v])=>v.neu),backgroundColor:'rgba(100,116,139,.6)',stack:'s'},
-      ]
+      labels:data.map(([k])=>truncate(k,18)),
+      datasets:[{data:data.map(([,v])=>v),backgroundColor:bgColor,borderColor:borderColor,borderWidth:1,borderRadius:4}]
     },
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{position:'top',labels:{color:'#e2e8f0',font:{size:12},padding:16,boxWidth:12}},tooltip:TOOLTIP_OPTS},
-      scales:{x:{stacked:true,grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8896a8',font:{size:11}}},y:{stacked:true,grid:{display:false},ticks:{color:'#e2e8f0',font:{size:12}}}}}
+      plugins:{legend:{display:false},tooltip:{...TOOLTIP_OPTS,callbacks:{title:(i)=>data[i[0].dataIndex][0]}}},
+      scales:{x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8896a8',font:{size:11}}},
+              y:{grid:{display:false},ticks:{color:'#e2e8f0',font:{size:11}}}}}
   });
 }
 
@@ -617,9 +624,11 @@ function exportExcel(){
     '카테고리':(r.categories||[]).join(', '),
     '인사이트':(r.insights||[]).join(' | '),
     '키워드':(r.keywords||[]).join(', '),
+    '성능키워드':(r.performance_keywords||[]).join(', '),
+    '요구사항키워드':(r.requirement_keywords||[]).join(', '),
+    '불만키워드':(r.complaint_keywords||[]).join(', '),
     '불만사항':(r.complaints_top||[]).map(c=>c.complaint).join(' | '),
     '요구사항':(r.requirements_top||[]).map(c=>c.requirement).join(' | '),
-    '긍정':r.sentiment?.positive||0, '부정':r.sentiment?.negative||0, '중립':r.sentiment?.neutral||0,
     '가성비언급':r.value_mentions?'O':'',
     '가격민감':r.price_sensitive?'O':'',
     '한국브랜드':(r.korean_brands||[]).join(', '),
