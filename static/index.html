@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DW Insight Analyzer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0e1a;
+  --surface:#111827;
+  --card:#151f30;
+  --card2:#1a2540;
+  --border:#263045;
+  --primary:#3b82f6;
+  --primary-d:#2563eb;
+  --success:#10b981;
+  --warn:#f59e0b;
+  --text:#e2e8f0;
+  --muted:#8896a8;
+  --tag-blue-bg:rgba(59,130,246,.13);
+  --tag-blue:rgba(59,130,246,.55);
+  --tag-purple-bg:rgba(167,139,250,.13);
+  --tag-purple:rgba(167,139,250,.55);
+  --tag-green-bg:rgba(52,211,153,.13);
+  --tag-green:rgba(52,211,153,.55);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+/* ── header ── */
+header{background:linear-gradient(135deg,#111827 0%,#0d1526 100%);border-bottom:1px solid var(--border);padding:18px 24px}
+.hd{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:14px}
+.logo{width:42px;height:42px;background:linear-gradient(135deg,#3b82f6,#6366f1);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.hd-title{font-size:21px;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hd-sub{font-size:12px;color:var(--muted);margin-top:2px}
+
+/* ── main ── */
+main{max-width:1200px;margin:0 auto;padding:28px 24px}
+
+/* ── card ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;margin-bottom:20px}
+.card-title{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.card-title::before{content:'';display:block;width:3px;height:14px;background:var(--primary);border-radius:2px}
+
+/* ── textarea ── */
+textarea{width:100%;height:210px;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:13px 14px;color:var(--text);font-size:13.5px;font-family:inherit;resize:vertical;line-height:1.6;transition:border-color .2s}
+textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+textarea::placeholder{color:var(--muted)}
+
+/* ── buttons ── */
+.btn{padding:9px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13.5px;font-weight:600;transition:all .18s;display:inline-flex;align-items:center;gap:7px}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-d);transform:translateY(-1px)}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{background:var(--border)}
+.btn-success{background:var(--success);color:#fff}
+.btn-success:hover{background:#059669;transform:translateY(-1px)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
+.btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;align-items:center}
+
+/* ── titles list ── */
+.titles-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
+.t-item{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .14s}
+.t-item:last-child{border-bottom:none}
+.t-item:hover{background:rgba(255,255,255,.025)}
+.t-item input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);cursor:pointer;flex-shrink:0}
+.t-text{font-size:13.5px;color:var(--text);line-height:1.4}
+.sel-count{color:var(--muted);font-size:12.5px;margin-left:auto}
+
+/* ── stats ── */
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:18px 16px;text-align:center}
+.stat-val{font-size:30px;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-lbl{font-size:12px;color:var(--muted);margin-top:5px}
+
+/* ── charts ── */
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:20px}
+@media(max-width:700px){.charts-row{grid-template-columns:1fr}}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
+.chart-lbl{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.chart-wrap{position:relative;height:270px}
+
+/* ── export bar ── */
+.export-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+.export-bar span{font-size:15.5px;font-weight:700}
+
+/* ── insight cards ── */
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:15px;margin-bottom:32px}
+.ig-card{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:18px;transition:border-color .2s}
+.ig-card:hover{border-color:rgba(59,130,246,.4)}
+.ig-card-title{font-size:13.5px;font-weight:600;color:var(--text);margin-bottom:13px;line-height:1.5}
+.ig-section{margin-bottom:10px}
+.ig-section-lbl{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:500;white-space:nowrap}
+.tag-b{background:var(--tag-blue-bg);color:#93c5fd;border:1px solid var(--tag-blue)}
+.tag-c{background:var(--tag-purple-bg);color:#c4b5fd;border:1px solid var(--tag-purple)}
+.tag-k{background:var(--tag-green-bg);color:#6ee7b7;border:1px solid var(--tag-green)}
+.insights-list{list-style:none;margin-top:9px}
+.insights-list li{font-size:12.5px;color:var(--muted);padding:4px 0 4px 16px;position:relative;line-height:1.55}
+.insights-list li::before{content:'▸';position:absolute;left:2px;color:var(--primary);font-size:10px}
+
+/* ── alert ── */
+.alert{padding:11px 15px;border-radius:8px;font-size:13px;margin-top:12px}
+.alert-err{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#fca5a5}
+.hidden{display:none!important}
+
+/* ── loading overlay ── */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:999;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+.overlay.on{display:flex}
+.spinner{width:50px;height:50px;border:4px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .75s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ov-title{color:var(--text);font-size:16px;font-weight:600}
+.ov-sub{color:var(--muted);font-size:13px;text-align:center;max-width:320px}
+.ov-progress{width:260px;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.ov-bar{height:100%;background:linear-gradient(90deg,var(--primary),#6366f1);width:0%;transition:width .4s;border-radius:3px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hd">
+    <div class="logo">🔍</div>
+    <div>
+      <div class="hd-title">DW Insight Analyzer</div>
+      <div class="hd-sub">Detailing World 포럼 인사이트 분석기</div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Step 1: Input -->
+  <div class="card" id="stepInput">
+    <div class="card-title">Step 1 · DW 검색결과 붙여넣기</div>
+    <textarea id="rawText" placeholder="Detailing World 검색결과를 여기에 붙여넣으세요.
+
+각 스레드 형식:
+제목 (첫 줄, 대문자로 시작)
+Pre-wash stages: Washing, Drying, Clay &amp; Detailing
+미리보기 텍스트... (소문자로 시작하는 긴 문장)
+댓글수 (숫자만)
+조회수 (숫자 또는 2.7K)
+작성자 · 날짜"></textarea>
+    <div id="parseErr" class="alert alert-err hidden"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="parseText()">🔎 제목 추출</button>
+      <button class="btn btn-secondary" onclick="resetAll()">↺ 초기화</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Titles review -->
+  <div class="card hidden" id="stepTitles">
+    <div class="card-title">Step 2 · 추출된 제목 검토 및 분석</div>
+    <div class="titles-wrap" id="titlesList"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="selAll(true)">모두 선택</button>
+      <button class="btn btn-secondary" onclick="selAll(false)">모두 해제</button>
+      <span class="sel-count" id="selCount"></span>
+      <button class="btn btn-primary" id="analyzeBtn" onclick="analyze()">✨ 분석 시작</button>
+    </div>
+  </div>
+
+  <!-- Step 3: Dashboard -->
+  <div id="dashboard" class="hidden">
+
+    <div class="stats-row" id="statsRow"></div>
+
+    <div class="charts-row">
+      <div class="chart-card">
+        <div class="chart-lbl">📦 브랜드 빈도 (Top 12)</div>
+        <div class="chart-wrap"><canvas id="brandChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-lbl">🗂️ 카테고리 분포</div>
+        <div class="chart-wrap"><canvas id="catChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="export-bar">
+      <span>💡 인사이트 카드</span>
+      <button class="btn btn-success" onclick="exportExcel()">📊 엑셀 다운로드</button>
+    </div>
+
+    <div class="ig-grid" id="igGrid"></div>
+
+  </div>
+
+</main>
+
+<!-- Loading overlay -->
+<div class="overlay" id="overlay">
+  <div class="spinner"></div>
+  <div class="ov-title" id="ovTitle">처리 중...</div>
+  <div class="ov-sub" id="ovSub"></div>
+  <div class="ov-progress"><div class="ov-bar" id="ovBar"></div></div>
+</div>
+
+<script>
+'use strict';
+
+let titles = [];
+let results = [];
+let brandChart = null;
+let catChart = null;
+
+// ── loading ───────────────────────────────────────────────────────────────────
+function showLoading(title, sub, pct) {
+  document.getElementById('ovTitle').textContent = title;
+  document.getElementById('ovSub').textContent = sub || '';
+  document.getElementById('ovBar').style.width = (pct || 15) + '%';
+  document.getElementById('overlay').classList.add('on');
+}
+function setProgress(pct) {
+  document.getElementById('ovBar').style.width = pct + '%';
+}
+function hideLoading() {
+  document.getElementById('overlay').classList.remove('on');
+}
+
+// ── error ─────────────────────────────────────────────────────────────────────
+function showErr(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function hideErr(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ── escape ────────────────────────────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Step 1: parse ─────────────────────────────────────────────────────────────
+async function parseText() {
+  const text = document.getElementById('rawText').value.trim();
+  if (!text) { showErr('parseErr', '텍스트를 입력해주세요.'); return; }
+  hideErr('parseErr');
+  showLoading('제목 추출 중...', '', 20);
+  try {
+    const res = await fetch('/api/parse', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({text})
+    });
+    if (!res.ok) throw new Error('서버 오류: ' + res.status);
+    const data = await res.json();
+    titles = data.titles || [];
+    if (!titles.length) {
+      showErr('parseErr', '제목을 찾을 수 없습니다. 형식을 확인해주세요.');
+      hideLoading();
+      return;
+    }
+    renderTitles();
+    const sec = document.getElementById('stepTitles');
+    sec.classList.remove('hidden');
+    setTimeout(() => sec.scrollIntoView({behavior:'smooth', block:'start'}), 100);
+  } catch (e) {
+    showErr('parseErr', '오류: ' + e.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+function renderTitles() {
+  document.getElementById('titlesList').innerHTML = titles.map((t, i) => `
+    <label class="t-item">
+      <input type="checkbox" checked data-i="${i}" onchange="updateCount()">
+      <span class="t-text">${esc(t)}</span>
+    </label>`).join('');
+  updateCount();
+}
+
+function updateCount() {
+  const total = titles.length;
+  const checked = document.querySelectorAll('#titlesList input:checked').length;
+  document.getElementById('selCount').textContent = `${checked} / ${total} 선택됨`;
+  document.getElementById('analyzeBtn').disabled = checked === 0;
+}
+
+function selAll(val) {
+  document.querySelectorAll('#titlesList input[type=checkbox]').forEach(c => c.checked = val);
+  updateCount();
+}
+
+function getSelected() {
+  return [...document.querySelectorAll('#titlesList input:checked')]
+    .map(c => titles[parseInt(c.dataset.i)]);
+}
+
+// ── Step 2: analyze ───────────────────────────────────────────────────────────
+async function analyze() {
+  const sel = getSelected();
+  if (!sel.length) { alert('분석할 제목을 선택해주세요.'); return; }
+  const cap = Math.min(sel.length, 20);
+  showLoading(
+    `${cap}개 스레드 분석 중...`,
+    'Anthropic AI + Detailing World 검색 중\n(스레드 당 5~15초 소요)',
+    10
+  );
+
+  // Simulate progress while waiting
+  let prog = 10;
+  const ticker = setInterval(() => {
+    prog = Math.min(prog + 2, 88);
+    setProgress(prog);
+  }, 1000);
+
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({titles: sel.slice(0, 20)})
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || '분석 실패 (서버 오류 ' + res.status + ')');
+    }
+    setProgress(95);
+    const data = await res.json();
+    results = data.results || [];
+    renderDashboard();
+    const db = document.getElementById('dashboard');
+    db.classList.remove('hidden');
+    setTimeout(() => db.scrollIntoView({behavior:'smooth', block:'start'}), 100);
+  } catch (e) {
+    alert('분석 오류: ' + e.message);
+  } finally {
+    clearInterval(ticker);
+    hideLoading();
+  }
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+function renderDashboard() {
+  const brandCnt = {}, catCnt = {};
+  let totalKw = 0;
+  for (const r of results) {
+    for (const b of r.brands || []) brandCnt[b] = (brandCnt[b] || 0) + 1;
+    for (const c of r.categories || []) catCnt[c] = (catCnt[c] || 0) + 1;
+    totalKw += (r.keywords || []).length;
+  }
+
+  // Stats
+  document.getElementById('statsRow').innerHTML = [
+    [results.length, '분석된 스레드'],
+    [Object.keys(brandCnt).length, '발견된 브랜드'],
+    [Object.keys(catCnt).length, '카테고리 수'],
+    [totalKw, '총 키워드'],
+  ].map(([v, l]) => `
+    <div class="stat">
+      <div class="stat-val">${v}</div>
+      <div class="stat-lbl">${l}</div>
+    </div>`).join('');
+
+  renderBrandChart(brandCnt);
+  renderCatChart(catCnt);
+  renderCards();
+}
+
+const PALETTE = [
+  '#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444',
+  '#06b6d4','#ec4899','#84cc16','#f97316','#6366f1',
+  '#a78bfa','#34d399',
+];
+
+function renderBrandChart(cnt) {
+  const sorted = Object.entries(cnt).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  if (!sorted.length) return;
+  if (brandChart) brandChart.destroy();
+  brandChart = new Chart(document.getElementById('brandChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(([k])=>k),
+      datasets: [{
+        data: sorted.map(([,v])=>v),
+        backgroundColor: 'rgba(59,130,246,.7)',
+        borderColor: '#3b82f6',
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {display:false},
+        tooltip: {backgroundColor:'#1e293b',titleColor:'#e2e8f0',bodyColor:'#94a3b8',borderColor:'#334155',borderWidth:1}
+      },
+      scales: {
+        x: {grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8896a8',font:{size:11}}},
+        y: {grid:{display:false},ticks:{color:'#e2e8f0',font:{size:12}}}
+      }
+    }
+  });
+}
+
+function renderCatChart(cnt) {
+  const sorted = Object.entries(cnt).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  if (!sorted.length) return;
+  if (catChart) catChart.destroy();
+  catChart = new Chart(document.getElementById('catChart'), {
+    type: 'doughnut',
+    data: {
+      labels: sorted.map(([k])=>k),
+      datasets: [{
+        data: sorted.map(([,v])=>v),
+        backgroundColor: PALETTE.slice(0, sorted.length),
+        borderColor: '#0a0e1a',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {color:'#e2e8f0',font:{size:11},padding:8,boxWidth:12}
+        },
+        tooltip: {backgroundColor:'#1e293b',titleColor:'#e2e8f0',bodyColor:'#94a3b8',borderColor:'#334155',borderWidth:1}
+      }
+    }
+  });
+}
+
+function renderCards() {
+  document.getElementById('igGrid').innerHTML = results.map(r => `
+    <div class="ig-card">
+      <div class="ig-card-title">${esc(r.title)}</div>
+      ${r.brands && r.brands.length ? `
+        <div class="ig-section">
+          <div class="ig-section-lbl">브랜드</div>
+          <div class="tags">${r.brands.slice(0,7).map(b=>`<span class="tag tag-b">${esc(b)}</span>`).join('')}</div>
+        </div>` : ''}
+      ${r.categories && r.categories.length ? `
+        <div class="ig-section">
+          <div class="ig-section-lbl">카테고리</div>
+          <div class="tags">${r.categories.slice(0,5).map(c=>`<span class="tag tag-c">${esc(c)}</span>`).join('')}</div>
+        </div>` : ''}
+      ${r.insights && r.insights.length ? `
+        <ul class="insights-list">
+          ${r.insights.map(i=>`<li>${esc(i)}</li>`).join('')}
+        </ul>` : ''}
+      ${r.keywords && r.keywords.length ? `
+        <div class="ig-section" style="margin-top:10px">
+          <div class="tags">${r.keywords.slice(0,8).map(k=>`<span class="tag tag-k">${esc(k)}</span>`).join('')}</div>
+        </div>` : ''}
+    </div>`).join('');
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+function exportExcel() {
+  if (!results.length) return;
+  const XLSX = window.XLSX;
+  const wb = XLSX.utils.book_new();
+
+  // Main sheet
+  const main = results.map(r => ({
+    '제목': r.title,
+    '브랜드': (r.brands||[]).join(', '),
+    '카테고리': (r.categories||[]).join(', '),
+    '인사이트': (r.insights||[]).join(' | '),
+    '키워드': (r.keywords||[]).join(', '),
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(main), '인사이트');
+
+  // Brand ranking
+  const bc = {};
+  results.forEach(r => (r.brands||[]).forEach(b => { bc[b]=(bc[b]||0)+1; }));
+  const brands = Object.entries(bc).sort((a,b)=>b[1]-a[1])
+    .map(([b,c]) => ({'브랜드':b,'언급 횟수':c}));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(brands), '브랜드 순위');
+
+  // Category distribution
+  const cc = {};
+  results.forEach(r => (r.categories||[]).forEach(c => { cc[c]=(cc[c]||0)+1; }));
+  const cats = Object.entries(cc).sort((a,b)=>b[1]-a[1])
+    .map(([c,n]) => ({'카테고리':c,'빈도':n}));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cats), '카테고리 분포');
+
+  const date = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `dw_insights_${date}.xlsx`);
+}
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+function resetAll() {
+  document.getElementById('rawText').value = '';
+  document.getElementById('stepTitles').classList.add('hidden');
+  document.getElementById('dashboard').classList.add('hidden');
+  hideErr('parseErr');
+  titles = [];
+  results = [];
+}
+</script>
+</body>
+</html>
