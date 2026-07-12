@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import re
@@ -7,7 +6,7 @@ from typing import List
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -32,36 +31,63 @@ class AnalyzeRequest(BaseModel):
     titles: List[str]
 
 
-# ── Title extraction ──────────────────────────────────────────────────────────
+# ── /api/parse — Claude API 기반 제목 추출 ───────────────────────────────────
 
-def _is_title_line(line: str) -> bool:
-    if not line or len(line) < 6:
-        return False
-    if re.match(r"^\d+$", line):
-        return False
-    if re.match(r"^\d+\.?\d*[KkMmBb]$", line):
-        return False
-    if "·" in line:
-        return False
-    if re.match(r"^[A-Za-z][^:]{1,40}:\s+\S", line):
-        return False
-    if len(line) > 40 and line[0].islower():
-        return False
-    return line[0].isupper()
+_PARSE_PROMPT = """다음은 Detailing World 포럼 검색결과를 복사한 텍스트야.
+여기서 포럼 스레드 제목만 정확히 추출해서 JSON 배열로 반환해줘.
+제목 아닌 것: Pre-wash stages 카테고리, 미리보기 텍스트, 조회수, 댓글수, 작성자, 날짜, 브랜드명 단독
+반드시 JSON 배열만 반환: ["제목1", "제목2", ...]
+
+텍스트:
+{text}"""
 
 
-def extract_titles(raw: str) -> List[str]:
-    seen: set = set()
-    results: List[str] = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if line and _is_title_line(line) and line not in seen:
-            seen.add(line)
-            results.append(line)
-    return results
+def _parse_titles_json(text: str) -> List[str]:
+    if not text:
+        return []
+    cleaned = text.strip()
+    # Remove markdown code fences if present
+    cleaned = re.sub(r"^```[a-z]*\n?", "", cleaned)
+    cleaned = re.sub(r"\n?```$", "", cleaned)
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return [str(t).strip() for t in data if t and str(t).strip()]
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\[.*?\]", cleaned, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group())
+            if isinstance(data, list):
+                return [str(t).strip() for t in data if t and str(t).strip()]
+        except json.JSONDecodeError:
+            pass
+    return []
 
 
-# ── Anthropic analysis ────────────────────────────────────────────────────────
+@app.post("/api/parse")
+async def api_parse(req: ParseRequest):
+    if not req.text.strip():
+        return {"titles": [], "count": 0}
+    if not _api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+
+    resp = await async_client.messages.create(
+        model="claude-opus-4-8",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": _PARSE_PROMPT.format(text=req.text),
+        }],
+    )
+
+    raw = resp.content[0].text if resp.content else ""
+    titles = _parse_titles_json(raw)
+    return {"titles": titles, "count": len(titles)}
+
+
+# ── /api/analyze — SSE 스트리밍 (순차 처리) ──────────────────────────────────
 
 _SYSTEM = """You are a car detailing market intelligence analyst for Korean business reporting.
 
@@ -91,23 +117,19 @@ Return ONLY this exact JSON structure (all text values in Korean):
 }}
 
 Field rules:
-- brands: list of car care brand names (original spelling)
-- categories: Korean detailing categories (세차/광택/왁스/실런트/세라믹코팅/도장보호/실내/휠/타이어/기타)
-- insights: 2-3 key discussion points IN KOREAN
-- keywords: 5-8 technical keywords IN KOREAN
-- complaints_top: up to 5 items as [{{"complaint": "한국어 불만내용", "count": N}}]
-- requirements_top: up to 5 items as [{{"requirement": "한국어 요구사항", "count": N}}]
-- sentiment: estimated positive/negative/neutral mention counts as integers 0-10
-- comparisons: products users directly compare [{{"product_a": "브랜드A", "product_b": "브랜드B"}}]
-- value_mentions: true if value-for-money or cost-effectiveness is discussed
-- price_sensitive: true if price is a primary concern in the thread
-- korean_brands: Korean-origin car care brands only (e.g. 불곰, 크리스탈, K2)
-- year_mentioned: integer year referenced in thread or null if none
-- gap_position: Korean description of an unmet market need found in discussion, empty string if none"""
-
-
-def _build_prompt(title: str) -> str:
-    return _PROMPT_TEMPLATE.format(title=title)
+- brands: car care brand names (original spelling)
+- categories: Korean (세차/광택/왁스/실런트/세라믹코팅/도장보호/실내/휠/타이어/기타)
+- insights: 2-3 key points IN KOREAN
+- keywords: 5-8 terms IN KOREAN
+- complaints_top: up to 5 [{{"complaint": "한국어", "count": N}}]
+- requirements_top: up to 5 [{{"requirement": "한국어", "count": N}}]
+- sentiment: integer scores 0-10
+- comparisons: [{{"product_a": "A", "product_b": "B"}}]
+- value_mentions: true if value-for-money discussed
+- price_sensitive: true if price is a key concern
+- korean_brands: Korean-origin brands only
+- year_mentioned: integer year or null
+- gap_position: Korean description of unmet need, empty string if none"""
 
 
 def _parse_json(text: str) -> dict:
@@ -138,7 +160,10 @@ async def _analyze_one(title: str) -> dict:
                 "max_uses": 2,
                 "allowed_domains": ["detailingworld.co.uk"],
             }],
-            messages=[{"role": "user", "content": _build_prompt(title)}],
+            messages=[{
+                "role": "user",
+                "content": _PROMPT_TEMPLATE.format(title=title),
+            }],
         )
         text = "".join(
             b.text for b in resp.content if hasattr(b, "text") and b.text
@@ -172,14 +197,6 @@ async def _analyze_one(title: str) -> dict:
         }
 
 
-# ── API endpoints ─────────────────────────────────────────────────────────────
-
-@app.post("/api/parse")
-async def api_parse(req: ParseRequest):
-    titles = extract_titles(req.text)
-    return {"titles": titles, "count": len(titles)}
-
-
 @app.post("/api/analyze")
 async def api_analyze(req: AnalyzeRequest):
     if not req.titles:
@@ -188,14 +205,23 @@ async def api_analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY가 설정되지 않았습니다.")
 
     titles = req.titles[:20]
-    sem = asyncio.Semaphore(3)
 
-    async def bounded(t: str) -> dict:
-        async with sem:
-            return await _analyze_one(t)
+    async def event_stream():
+        for title in titles:
+            result = await _analyze_one(title)
+            payload = json.dumps(result, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+        yield "data: [DONE]\n\n"
 
-    results = await asyncio.gather(*[bounded(t) for t in titles])
-    return {"results": list(results)}
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # disable nginx/Railway proxy buffering
+        },
+    )
 
 
 # ── Static files ──────────────────────────────────────────────────────────────
@@ -211,4 +237,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        timeout_keep_alive=120,
+    )

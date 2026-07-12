@@ -281,7 +281,7 @@ const TOOLTIP_OPTS = {
 async function parseText(){
   const text=document.getElementById('rawText').value.trim();
   if(!text){ showErr('parseErr','텍스트를 입력해주세요.'); return; }
-  hideErr('parseErr'); showLoading('제목 추출 중...');
+  hideErr('parseErr'); showLoading('제목 추출 중...', 'Claude AI로 분석 중', 30);
   try{
     const r=await fetch('/api/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
     if(!r.ok) throw new Error('서버 오류 '+r.status);
@@ -310,22 +310,65 @@ function updateCount(){
 function selAll(v){ document.querySelectorAll('#titlesList input[type=checkbox]').forEach(c=>c.checked=v); updateCount(); }
 function getSelected(){ return [...document.querySelectorAll('#titlesList input:checked')].map(c=>titles[+c.dataset.i]); }
 
-// ── analyze ──
+// ── analyze (SSE streaming) ──
 async function analyze(){
   const sel=getSelected(); if(!sel.length){ alert('분석할 제목을 선택해주세요.'); return; }
   const cap=Math.min(sel.length,20);
-  showLoading(`${cap}개 스레드 분석 중...`,'Anthropic AI + Detailing World 검색 중\n(스레드당 5~15초 소요)',10);
-  let prog=10; const ticker=setInterval(()=>{ prog=Math.min(prog+1.5,88); setProgress(prog); },1000);
+  results=[];
+  showLoading(`0 / ${cap} 분석 중...`,'순차 처리 중 — 결과가 실시간으로 표시됩니다',0);
+
   try{
-    const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({titles:sel.slice(0,20)})});
-    if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||'분석 실패 ('+r.status+')'); }
-    setProgress(95);
-    const d=await r.json(); results=d.results||[];
-    renderDashboard();
-    const db=document.getElementById('dashboard'); db.classList.remove('hidden');
-    setTimeout(()=>db.scrollIntoView({behavior:'smooth',block:'start'}),100);
+    const resp=await fetch('/api/analyze',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({titles:sel.slice(0,20)})
+    });
+    if(!resp.ok){
+      const e=await resp.json().catch(()=>({}));
+      throw new Error(e.detail||'분석 실패 ('+resp.status+')');
+    }
+
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let buffer='';
+    let done_flag=false;
+
+    while(!done_flag){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buffer+=decoder.decode(value,{stream:true});
+
+      // Process complete SSE lines from buffer
+      const lines=buffer.split('\n');
+      buffer=lines.pop(); // keep incomplete last chunk
+
+      for(const line of lines){
+        if(!line.startsWith('data: ')) continue;
+        const payload=line.slice(6).trim();
+        if(payload==='[DONE]'){ done_flag=true; break; }
+        try{
+          const result=JSON.parse(payload);
+          results.push(result);
+          const pct=Math.round(results.length/cap*100);
+          setProgress(pct);
+          document.getElementById('ovTitle').textContent=`${results.length} / ${cap} 분석 완료`;
+
+          // Show dashboard on first result
+          if(results.length===1){
+            const db=document.getElementById('dashboard');
+            db.classList.remove('hidden');
+          }
+          // Re-render dashboard incrementally
+          renderDashboard();
+        }catch(e){ console.warn('SSE parse error',e); }
+      }
+    }
+
+    if(results.length){
+      setTimeout(()=>document.getElementById('dashboard').scrollIntoView({behavior:'smooth',block:'start'}),200);
+    }
   }catch(e){ alert('분석 오류: '+e.message); }
-  finally{ clearInterval(ticker); hideLoading(); }
+  finally{ hideLoading(); }
 }
 
 // ── aggregation helpers ──
