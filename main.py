@@ -37,19 +37,14 @@ class AnalyzeRequest(BaseModel):
 def _is_title_line(line: str) -> bool:
     if not line or len(line) < 6:
         return False
-    # number-only
     if re.match(r"^\d+$", line):
         return False
-    # view-count like 2.7K, 1.2M
     if re.match(r"^\d+\.?\d*[KkMmBb]$", line):
         return False
-    # author · date
     if "·" in line:
         return False
-    # tag lines: "Pre-wash stages: ...", "Wash: ..."
     if re.match(r"^[A-Za-z][^:]{1,40}:\s+\S", line):
         return False
-    # long preview text starting with lowercase
     if len(line) > 40 and line[0].islower():
         return False
     return line[0].isupper()
@@ -68,21 +63,51 @@ def extract_titles(raw: str) -> List[str]:
 
 # ── Anthropic analysis ────────────────────────────────────────────────────────
 
-_SYSTEM = (
-    "You are a car detailing data analyst. "
-    "Respond with ONLY a valid JSON object — no markdown, no preamble, no extra text. "
-    "Extract: brands (car care product brand names), "
-    "categories (detailing categories: wash / polish / wax / sealant / "
-    "ceramic coating / paint correction / interior / wheels / tyres / vinyl wrap / etc.), "
-    "insights (2-3 key discussion points from detailers), "
-    "keywords (5-8 relevant technical terms)."
-)
+_SYSTEM = """You are a car detailing market intelligence analyst for Korean business reporting.
 
-_PROMPT = (
-    'Search Detailing World for this thread: "{title}"\n\n'
-    "Return ONLY this JSON object (no other text):\n"
-    '{{"brands":[],"categories":[],"insights":[],"keywords":[]}}'
-)
+CRITICAL RULE: ALL descriptive text in your JSON MUST be written in Korean (한국어).
+This includes: insights, keywords, complaints, requirements, gap_position, categories.
+Only brand/product names keep their original English spelling (e.g. Meguiar's, AutoGlym, Koch Chemie).
+
+Respond with ONLY a valid JSON object — no markdown fences, no preamble, no trailing text."""
+
+_PROMPT_TEMPLATE = """Search Detailing World for this forum thread: "{title}"
+
+Return ONLY this exact JSON structure (all text values in Korean):
+{{
+  "brands": [],
+  "categories": [],
+  "insights": [],
+  "keywords": [],
+  "complaints_top": [],
+  "requirements_top": [],
+  "sentiment": {{"positive": 0, "negative": 0, "neutral": 0}},
+  "comparisons": [],
+  "value_mentions": false,
+  "price_sensitive": false,
+  "korean_brands": [],
+  "year_mentioned": null,
+  "gap_position": ""
+}}
+
+Field rules:
+- brands: list of car care brand names (original spelling)
+- categories: Korean detailing categories (세차/광택/왁스/실런트/세라믹코팅/도장보호/실내/휠/타이어/기타)
+- insights: 2-3 key discussion points IN KOREAN
+- keywords: 5-8 technical keywords IN KOREAN
+- complaints_top: up to 5 items as [{{"complaint": "한국어 불만내용", "count": N}}]
+- requirements_top: up to 5 items as [{{"requirement": "한국어 요구사항", "count": N}}]
+- sentiment: estimated positive/negative/neutral mention counts as integers 0-10
+- comparisons: products users directly compare [{{"product_a": "브랜드A", "product_b": "브랜드B"}}]
+- value_mentions: true if value-for-money or cost-effectiveness is discussed
+- price_sensitive: true if price is a primary concern in the thread
+- korean_brands: Korean-origin car care brands only (e.g. 불곰, 크리스탈, K2)
+- year_mentioned: integer year referenced in thread or null if none
+- gap_position: Korean description of an unmet market need found in discussion, empty string if none"""
+
+
+def _build_prompt(title: str) -> str:
+    return _PROMPT_TEMPLATE.format(title=title)
 
 
 def _parse_json(text: str) -> dict:
@@ -92,7 +117,6 @@ def _parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Try to find a JSON object in the response
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
@@ -106,7 +130,7 @@ async def _analyze_one(title: str) -> dict:
     try:
         resp = await async_client.messages.create(
             model="claude-opus-4-8",
-            max_tokens=1024,
+            max_tokens=2048,
             system=_SYSTEM,
             tools=[{
                 "type": "web_search_20260209",
@@ -114,7 +138,7 @@ async def _analyze_one(title: str) -> dict:
                 "max_uses": 2,
                 "allowed_domains": ["detailingworld.co.uk"],
             }],
-            messages=[{"role": "user", "content": _PROMPT.format(title=title)}],
+            messages=[{"role": "user", "content": _build_prompt(title)}],
         )
         text = "".join(
             b.text for b in resp.content if hasattr(b, "text") and b.text
@@ -126,14 +150,24 @@ async def _analyze_one(title: str) -> dict:
             "categories": data.get("categories", []),
             "insights": data.get("insights", []),
             "keywords": data.get("keywords", []),
+            "complaints_top": data.get("complaints_top", []),
+            "requirements_top": data.get("requirements_top", []),
+            "sentiment": data.get("sentiment", {"positive": 0, "negative": 0, "neutral": 0}),
+            "comparisons": data.get("comparisons", []),
+            "value_mentions": data.get("value_mentions", False),
+            "price_sensitive": data.get("price_sensitive", False),
+            "korean_brands": data.get("korean_brands", []),
+            "year_mentioned": data.get("year_mentioned"),
+            "gap_position": data.get("gap_position", ""),
         }
     except Exception as exc:
         return {
             "title": title,
-            "brands": [],
-            "categories": [],
-            "insights": [f"분석 오류: {str(exc)[:120]}"],
-            "keywords": [],
+            "brands": [], "categories": [], "insights": [f"분석 오류: {str(exc)[:120]}"],
+            "keywords": [], "complaints_top": [], "requirements_top": [],
+            "sentiment": {"positive": 0, "negative": 0, "neutral": 0},
+            "comparisons": [], "value_mentions": False, "price_sensitive": False,
+            "korean_brands": [], "year_mentioned": None, "gap_position": "",
             "error": True,
         }
 
